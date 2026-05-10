@@ -6,7 +6,7 @@
 ![Status](https://img.shields.io/badge/Status-Complete-brightgreen)
 
 > **Master's Thesis — Embedded Systems Engineering**  
-> Fachhochschule Dortmund | Department of Information Technology  
+> Fachhochschule Dortmund | Department of Embedded Systems Engineering 
 > Author: Md Abul Khair | Matriculation: 7207060
 
 ---
@@ -63,16 +63,6 @@ timing, or spatial position.
 
 ---
 
-## Repository Structure
-
-```
-├── radar_data_analyser.m              # Parameter tuning script
-├── Final_radar_detection_separator_with_angle.m  # Main pipeline
-├── README.md
-└── data/                              # Place .bin files here
-```
-
----
 
 ## Scripts
 
@@ -132,7 +122,7 @@ The complete eight-stage processing pipeline.
 
 ### Step 1 — Place Radar Data
 
-Put your recorded `.bin` file inside the project folder or 
+Put recorded `.bin` file inside the project folder or 
 a `data/` subdirectory.
 
 ### Step 2 — Run Analyser First
@@ -142,7 +132,7 @@ radar_data_analyser.m
 ```
 
 Use the generated plots and printed statistics to understand 
-your dataset and tune parameters before running the main script.
+the dataset and tune parameters before running the main script.
 
 ### Step 3 — Configure Main Script
 
@@ -232,29 +222,3 @@ profiling rather than assumed from prior literature.
 
 ---
 
-## Thesis Reference
-
-If you use this code, please cite:
-
-```
-Khair, M. A. (2026). Interference Characterization and 
-Localization for FMCW mmWave Radars. Master's Thesis, 
-Fachhochschule Dortmund, Department of Information Technology.
-```
-
----
-
-## License
-
-This code was developed for academic research purposes as 
-part of a Master's thesis at Fachhochschule Dortmund. 
-Feel free to use and adapt it for research purposes with 
-appropriate attribution.
-
----
-
-## Contact
-
-**Md Abul Khair**  
-Master's in Informationstechnologie  
-Fachhochschule Dortmund
