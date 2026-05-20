@@ -63,6 +63,66 @@ timing, or spatial position.
 
 ---
 
+## Step 1 — Data Collection
+
+Before any analysis can take place, raw radar data must be 
+recorded from the hardware setup. The collected `.bin` files 
+are the direct input to the analysis pipeline.
+
+### Equipment
+
+| Role | Device |
+|---|---|
+| Observer radar | TI IWR6843ISK |
+| Raw data capture | TI DCA1000EVM |
+| Interferer radar | TI IWR6843AOPEVM |
+
+### Setup and Configuration
+
+**Observer PC (data recording machine)**
+
+The IWR6843ISK observer radar is connected to the DCA1000EVM 
+capture board, and both are connected to a PC via USB/Ethernet. 
+**mmWave Studio** is used on this PC to configure the observer 
+radar chirp parameters (bandwidth, ADC samples, frame rate, 
+etc.) and to start/stop data capture. The observer radar both 
+transmits and receives radar signals. All captured raw ADC data 
+is saved automatically as a `.bin` file on this PC.
+
+**Interferer PC (transmit-only machine)**
+
+The IWR6843AOPEVM interferer radar is connected to a separate 
+PC. **Demo Visualizer** is used on this PC to configure and 
+activate the interferer radar. The interferer radar transmits 
+signals only — no data is recorded from it.
+
+### Data Flow
+
+```
+[IWR6843AOPEVM]          [IWR6843ISK] ←──── RF interference
+ Interferer radar          Observer radar
+ (transmit only)          (transmit + receive)
+       │                        │
+ Demo Visualizer           DCA1000EVM
+ (Interferer PC)           (capture board)
+                                │
+                           mmWave Studio
+                           (Observer PC)
+                                │
+                           raw_data.bin
+```
+
+### Output
+
+The recorded `.bin` files contain raw ADC samples from the 
+observer radar and are the sole input to the MATLAB analysis 
+pipeline. No data is collected from the interferer radar side.
+
+> **Note:** Raw `.bin` files are not included in this 
+> repository due to file size. Contact the author for 
+> data access.
+
+---
 
 ## Scripts
 
@@ -119,11 +179,6 @@ The complete eight-stage processing pipeline.
 - MATLAB R2021a or later
 - Signal Processing Toolbox
 - Statistics and Machine Learning Toolbox
-
-### Step 1 — Place Radar Data
-
-Put recorded `.bin` file inside the project folder or 
-a `data/` subdirectory.
 
 ### Step 2 — Run Analyser First
 
@@ -221,4 +276,3 @@ profiling rather than assumed from prior literature.
 | Spike threshold δ | 5.0 dB | 5.0 dB |
 
 ---
-
