@@ -22,7 +22,7 @@ clear; clc; close all;
 %  CONFIGURATION — only change these lines between datasets
 %% ================================================================
 % Path to raw binary ADC file captured from the radar sensor
-testFile         = '256adc_datacleanstatic.bin';
+testFile         = 'adc_data_with_moving_iinterference0_2_Raw_0.bin';
 
 % Number of ADC samples per chirp — must match the capture configuration
 % Supported values: 128 or 256
@@ -169,8 +169,8 @@ fprintf('--------------------------------------\n\n');
 col_noise        = [0.75 0.75 0.75];  % light grey  — noise / unclassified
 col_static       = [0.13 0.55 0.13];  % green       — static targets
 col_moving       = [0.12 0.35 0.75];  % blue        — moving targets (pedestrians)
-col_interf       = [0.85 0.10 0.10];  % red         — confirmed interference
-col_interf_weak  = [0.95 0.55 0.55];  % pink/light  — weak / unclustered interference
+col_interf       = [0.85 0.10 0.10];  % red         — clustered interference
+col_interf_weak  = [0.95 0.55 0.55];  % pink/light  — isolated interference
 
 %% --- Hann windows for range (fast-time) and Doppler (slow-time) FFTs ---
 % Applied before FFT to suppress spectral sidelobes
@@ -580,7 +580,7 @@ fprintf('  Noise        : %d\n\n', sum(labels=="Noise"));
 %
 %  DBSCAN returns -1 for noise/outlier points; these are:
 %    Static/Moving  → remain in their class but unclustered
-%    Interference   → re-labelled "InterfWeak" (unreliable for bearing)
+%    Interference   → re-labelled "isolated interference" (unreliable for bearing)
 %% ================================================================
 fprintf('--- STEP 5: DBSCAN Clustering ---\n');
 
@@ -608,17 +608,18 @@ if numel(idx) >= dbscan_minpts
 end
 
 % --- Cluster Interference detections ---
-% Uses a looser epsilon (dbscan_eps_interf) because interference
-% spreads more broadly across range-Doppler space than real targets.
 idx = find(labels == "Interference");
 if numel(idx) >= dbscan_minpts_interf
     feats = [det_range(idx)/rangeRes, det_vel(idx)/velRes];
     clust = dbscan(feats, dbscan_eps_interf, dbscan_minpts_interf);
     cluster_ids(idx) = clust + 3000;
 
-    % Outliers from DBSCAN (clust==-1) → demoted to InterfWeak
+    % Outliers from DBSCAN (clust==-1) → demoted to isolated interference
     unclustMask = clust == -1;
-    labels(idx(unclustMask)) = "InterfWeak";
+    labels(idx(unclustMask)) = "isolated interference";
+    
+    % Core cluster members remain assigned to clustered interference
+    labels(idx(~unclustMask)) = "clustered interference";
 
     nClust  = max(clust);
     nWeak   = sum(unclustMask);
@@ -626,13 +627,13 @@ if numel(idx) >= dbscan_minpts_interf
     fprintf('  Interf  : %d detections → %d clusters (%d confirmed), %d weak\n', ...
         numel(idx), max(nClust,0), nStrong, nWeak);
 elseif numel(idx) > 0
-    % Too few detections for any cluster → all are weak
-    labels(idx) = "InterfWeak";
+    % Too few detections for any cluster → all are isolated interference
+    labels(idx) = "isolated interference";
     fprintf('  Interf  : %d detections — all weak (below DBSCAN minimum)\n', numel(idx));
 end
 
-fprintf('  Confirmed Interference : %d\n', sum(labels=="Interference"));
-fprintf('  Weak Interference      : %d\n\n', sum(labels=="InterfWeak"));
+fprintf('  Clustered Interference : %d\n', sum(labels=="clustered interference"));
+fprintf('  Isolated Interference  : %d\n\n', sum(labels=="isolated interference"));
 
 %% ================================================================
 %  STEP 6: CLUSTER CENTROIDS
@@ -642,7 +643,7 @@ fprintf('  Weak Interference      : %d\n\n', sum(labels=="InterfWeak"));
 %  detections.  Results are stored in centroid_list for plotting.
 %% ================================================================
 fprintf('--- Cluster Centroids ---\n');
-fprintf('%-15s %6s %10s %10s %8s %8s %8s %8s\n', ...
+fprintf('%-22s %6s %10s %10s %8s %8s %8s %8s\n', ...
     'Class','ClustID','Range(m)','Vel(m/s)','SNR(dB)','X(m)','Y(m)','Count');
 fprintf('%s\n', repmat('-',1,80));
 
@@ -651,10 +652,10 @@ centroid_list = [];
 
 % Colour and label maps indexed by classIndex (1=Static, 2=Moving, 3=Interference)
 colMap = {col_static, col_moving, col_interf};
-lblMap = {'Static centroid','Moving centroid','Interference centroid'};
+lblMap = {'Static centroid','Moving centroid','Clustered Interference centroid'};
 
 % Class → offset mapping for extracting cluster IDs added in Step 5
-clsCluster = {"Static",1000;"Moving",2000;"Interference",3000};
+clsCluster = {"Static",1000;"Moving",2000;"clustered interference",3000};
 
 for c = 1:size(clsCluster,1)
     cl     = clsCluster{c,1};
@@ -673,7 +674,7 @@ for c = 1:size(clsCluster,1)
         cX     = mean(det_x(cidx));
         cY     = mean(det_y(cidx));
         cCount = numel(cidx);
-        fprintf('%-15s %6d %10.3f %10.3f %8.2f %8.3f %8.3f %8d\n', ...
+        fprintf('%-22s %6d %10.3f %10.3f %8.2f %8.3f %8.3f %8d\n', ...
             cl, uc-offset, cRange, cVel, cSNR, cX, cY, cCount);
         centroid_list(end+1,:) = [c, uc, cRange, cVel, cSNR, cX, cY, cCount];
     end
@@ -702,13 +703,12 @@ end
 %
 %  Convention: 0 deg = directly ahead, negative = left, positive = right
 %% ================================================================
-nConfirmedInterf = sum(labels=="Interference");
+nConfirmedInterf = sum(labels=="clustered interference");
 
 if nConfirmedInterf > 0
     fprintf('\n--- STEP 6b: Interference Bearing Estimation ---\n');
     fprintf('Convention: 0 deg = directly ahead, negative = left, positive = right\n\n');
-
-    interfIdx      = find(labels=="Interference");
+    interfIdx = find(labels=="clustered interference");
     interfClustIDs = cluster_ids(interfIdx);
     uniqueClustIDs = unique(interfClustIDs);
     uniqueClustIDs = uniqueClustIDs(uniqueClustIDs > 3000); % only interference clusters
@@ -723,7 +723,7 @@ if nConfirmedInterf > 0
     cluster_range        = zeros(nClusters, 1);
     cluster_reliability  = strings(nClusters, 1);
 
-    fprintf('%-8s %10s %12s %12s %10s %12s\n', ...
+    fprintf('%-16s %10s %12s %12s %10s %12s\n', ...
         'Cluster','Range(m)','Bearing(deg)','Std(deg)','SNR(dB)','Reliability');
     fprintf('%s\n', repmat('-',1,68));
 
@@ -783,7 +783,7 @@ if nConfirmedInterf > 0
         cluster_range(ci)       = mean(det_range(cidx));
         cluster_reliability(ci) = reliability;
 
-        fprintf('%-8d %10.2f %12.1f %12.1f %10.2f %12s\n', ...
+        fprintf('%-16d %10.2f %12.1f %12.1f %10.2f %12s\n', ...
             ci, cluster_range(ci), bearing_deg_val, circ_std, ...
             cluster_snr_db(ci), reliability);
     end
@@ -860,7 +860,7 @@ if nConfirmedInterf > 0
 
     for fi = 1:numel(spike_frames)
         fnum              = spike_frames(fi);
-        frame_interf_idx  = find(labels=="Interference" & det_frame==fnum);
+        frame_interf_idx = find(labels=="clustered interference" & det_frame==fnum);
         if numel(frame_interf_idx) < 2, continue; end  % need at least 2 for phase estimate
 
         % Coherent phase sum for this frame's interference detections
@@ -919,14 +919,14 @@ if ~isnan(bearing_weighted)
 else
     fprintf('No bearing estimate (no confirmed clusters)\n');
 end
-fprintf('%-18s %8s %8s %8s %10s %10s\n', ...
+fprintf('%-22s %8s %8s %8s %10s %10s\n', ...
     'Class','Count','SNR_mean','SNR_std','|Vel|_mean','Range_mean');
 fprintf('%s\n', repmat('-',1,68));
-allClasses = ["Noise","Static","Moving","Interference","InterfWeak"];
+allClasses = ["Noise","Static","Moving","clustered interference","isolated interference"];
 for c = 1:numel(allClasses)
     idx = labels == allClasses(c);
     if sum(idx)==0, continue; end
-    fprintf('%-18s %8d %8.2f %8.2f %10.3f %10.3f\n', ...
+    fprintf('%-22s %8d %8.2f %8.2f %10.3f %10.3f\n', ...
         allClasses(c), sum(idx), ...
         mean(det_snr(idx)), std(det_snr(idx)), ...
         mean(abs(det_vel(idx))), mean(det_range(idx)));
@@ -954,8 +954,8 @@ inRange = det_range >= minPhysicalRange & det_range <= maxPhysicalRange;
 % Detection counts per class for plot titles and conditional rendering
 nStatic = sum(labels=="Static");
 nMoving = sum(labels=="Moving");
-nInterf = sum(labels=="Interference");
-nWeak   = sum(labels=="InterfWeak");
+nInterf = sum(labels=="clustered interference");
+nWeak   = sum(labels=="isolated interference");
 
 % --- Fig 1: Frame power with spike detection ---
 % Shows the mean RD power time-series and highlights detected spikes.
@@ -997,14 +997,14 @@ if nMoving>0
         'DisplayName',sprintf('Moving (%d)',nMoving));
 end
 if nInterf>0
-    scatter(abs(det_vel(labels=="Interference")),det_range(labels=="Interference"),...
+    scatter(abs(det_vel(labels=="clustered interference")),det_range(labels=="clustered interference"),...
         45,col_interf,'d','filled','MarkerFaceAlpha',0.95,...
-        'DisplayName',sprintf('Interference confirmed (%d)',nInterf));
+        'DisplayName',sprintf('Clustered Interference (%d)',nInterf));
 end
 if nWeak>0
-    scatter(abs(det_vel(labels=="InterfWeak")),det_range(labels=="InterfWeak"),...
+    scatter(abs(det_vel(labels=="isolated interference")),det_range(labels=="isolated interference"),...
         15,col_interf_weak,'o','filled','MarkerFaceAlpha',0.7,...
-        'DisplayName',sprintf('Interference weak (%d)',nWeak));
+        'DisplayName',sprintf('Isolated Interference (%d)',nWeak));
 end
 % Overlay velocity threshold lines for visual verification
 xline(vel_static_thresh,'g--','LineWidth',1,'HandleVisibility','off');
@@ -1041,14 +1041,14 @@ if nMoving>0
         'DisplayName',sprintf('Moving (%d)',nMoving));
 end
 if nInterf>0
-    scatter(det_x(labels=="Interference"),det_y(labels=="Interference"),...
+    scatter(det_x(labels=="clustered interference"),det_y(labels=="clustered interference"),...
         60,col_interf,'d','filled','MarkerFaceAlpha',0.95,...
-        'DisplayName',sprintf('Interference confirmed (%d)',nInterf));
+        'DisplayName',sprintf('Clustered Interference (%d)',nInterf));
 end
 if nWeak>0
-    scatter(det_x(labels=="InterfWeak"),det_y(labels=="InterfWeak"),...
+    scatter(det_x(labels=="isolated interference"),det_y(labels=="isolated interference"),...
         12,col_interf_weak,'o','filled','MarkerFaceAlpha',0.65,...
-        'DisplayName',sprintf('Interference weak (%d)',nWeak));
+        'DisplayName',sprintf('Isolated Interference (%d)',nWeak));
 end
 
 % Overlay cluster centroids as pentagrams; show each class in legend once
@@ -1080,7 +1080,7 @@ xlim([-5 5]); ylim([0 6]);
 xlabel('X (m) — Cross-range'); ylabel('Y (m) — Forward range');
 title({sprintf('X/Y Spatial Map — %s — %s', config_label, ...
        strrep(testFile,'_Raw_0.bin','')); ...
-       sprintf('%d frames | Static:%d | Moving:%d | Interf(conf):%d | Interf(weak):%d | Spikes:%d/%d', ...
+       sprintf('%d frames | Static:%d | Moving:%d | Interf(clustered):%d | Interf(isolated):%d | Spikes:%d/%d', ...
        Total_Audited, nStatic, nMoving, nInterf, nWeak, ...
        Interfered_Count, Total_Audited)}, 'Interpreter','none');
 legend('Location','northeast'); grid on;
@@ -1088,7 +1088,7 @@ legend('Location','northeast'); grid on;
 % Annotation box summarising interference counts (only when interference found)
 if Interfered_Count >= min_spike_count
     annotation('textbox',[0.12 0.01 0.65 0.05],...
-        'String',sprintf('Interference spikes: %d/%d (%.1f%%)  |  Confirmed: %d  |  Weak: %d', ...
+        'String',sprintf('Interference spikes: %d/%d (%.1f%%)  |  Clustered: %d  |  Isolated: %d', ...
         Interfered_Count,Total_Audited,100*Interfered_Count/Total_Audited,...
         nInterf,nWeak),...
         'FitBoxToText','on','BackgroundColor',[1 0.93 0.93],...
@@ -1102,8 +1102,8 @@ hold on;
 clsMap3D = {"Noise",col_noise,6,0.10,'o'; ...
             "Static",col_static,50,0.85,'s'; ...
             "Moving",col_moving,20,0.60,'^'; ...
-            "Interference",col_interf,60,0.95,'d'; ...
-            "InterfWeak",col_interf_weak,12,0.65,'o'};
+            "Clustered Interference",col_interf,60,0.95,'d'; ...
+            "Isolated Interference",col_interf_weak,12,0.65,'o'};
 for c=1:size(clsMap3D,1)
     cl=clsMap3D{c,1}; col=clsMap3D{c,2};
     sz=clsMap3D{c,3}; alp=clsMap3D{c,4}; mkr=clsMap3D{c,5};
@@ -1151,13 +1151,13 @@ for f = 1:Total_Audited
     fi = det_frame==f;
     frameCount(f,1) = sum(labels=="Static"       & fi);
     frameCount(f,2) = sum(labels=="Moving"       & fi);
-    frameCount(f,3) = sum(labels=="Interference" & fi);
-    frameCount(f,4) = sum(labels=="InterfWeak"   & fi);
+    frameCount(f,3) = sum(labels=="clustered interference" & fi);
+    frameCount(f,4) = sum(labels=="isolated interference"   & fi);
 end
 plot(frameCount(:,1),'Color',col_static,'LineWidth',1.5,'DisplayName','Static');
 plot(frameCount(:,2),'Color',col_moving,'LineWidth',1.5,'DisplayName','Moving');
-plot(frameCount(:,3),'Color',col_interf,'LineWidth',2.0,'DisplayName','Interference (confirmed)');
-plot(frameCount(:,4),'Color',col_interf_weak,'LineWidth',1.0,'DisplayName','Interference (weak)');
+plot(frameCount(:,3),'Color',col_interf,'LineWidth',2.0,'DisplayName','Clustered Interference');
+plot(frameCount(:,4),'Color',col_interf_weak,'LineWidth',1.0,'DisplayName','Isolated Interference');
 if Interfered_Count > 0
     % Shade spike frames with light red vertical lines
     for ifr = find(interfered_flags(1:Total_Audited))'
@@ -1174,7 +1174,7 @@ legend('Location','best'); grid on;
 figure('Color','w','Name','SNR Distribution');
 hold on;
 clsSNR = {"Noise",col_noise;"Static",col_static;"Moving",col_moving; ...
-          "Interference",col_interf;"InterfWeak",col_interf_weak};
+          "clustered interference",col_interf;"isolated interference",col_interf_weak};
 for c=1:size(clsSNR,1)
     cl=clsSNR{c,1}; col=clsSNR{c,2};
     idx=labels==cl & inRange;
@@ -1253,16 +1253,16 @@ if nMoving > 0
         'MarkerEdgeColor', 'none', 'DisplayName', sprintf('Moving (%d)', nMoving));
 end
 if nInterf > 0
-    scatter(ax, det_vel(labels=="Interference"), det_range(labels=="Interference"), ...
+    scatter(ax, det_vel(labels=="clustered interference"), det_range(labels=="clustered interference"), ...
         50, col_interf, 'd', 'filled', 'MarkerFaceAlpha', 1.0, ...
         'MarkerEdgeColor', 'w', 'LineWidth', 0.5, ...
-        'DisplayName', sprintf('Interference confirmed (%d)', nInterf));
+        'DisplayName', sprintf('Clustered Interference (%d)', nInterf));
 end
 if nWeak > 0
-    scatter(ax, det_vel(labels=="InterfWeak"), det_range(labels=="InterfWeak"), ...
+    scatter(ax, det_vel(labels=="isolated interference"), det_range(labels=="isolated interference"), ...
         12, col_interf_weak, 'o', 'filled', 'MarkerFaceAlpha', 0.70, ...
         'MarkerEdgeColor', 'none', ...
-        'DisplayName', sprintf('Interference weak (%d)', nWeak));
+        'DisplayName', sprintf('Isolated Interference (%d)', nWeak));
 end
 
 % Cluster centroid stars
@@ -1312,7 +1312,7 @@ grid(ax, 'on');
 
 title(ax, {sprintf('Range-Doppler Map (averaged, %d frames) — %s', ...
            frames_accumulated, config_label); ...
-           sprintf('Static:%d | Moving:%d | Interf(conf):%d | Interf(weak):%d', ...
+           sprintf('Static:%d | Moving:%d | Interf(clustered):%d | Interf(isolated):%d', ...
            nStatic, nMoving, nInterf, nWeak)}, ...
     'Color', 'w', 'Interpreter', 'none');
 
@@ -1322,7 +1322,7 @@ lgd = legend(ax, 'Location', 'northeast', 'TextColor', 'w', ...
 % Interference summary annotation
 if Interfered_Count >= min_spike_count
     annotation('textbox', [0.13 0.01 0.60 0.04], ...
-        'String', sprintf('Spikes: %d/%d (%.1f%%)  |  DC notch: bins %d–%d  |  Confirmed: %d  |  Weak: %d', ...
+        'String', sprintf('Spikes: %d/%d (%.1f%%)  |  DC notch: bins %d–%d  |  Clustered: %d  |  Isolated: %d', ...
         Interfered_Count, Total_Audited, 100*Interfered_Count/Total_Audited, ...
         dcLo, dcHi, nInterf, nWeak), ...
         'FitBoxToText', 'on', 'BackgroundColor', [0.15 0.05 0.05], ...
