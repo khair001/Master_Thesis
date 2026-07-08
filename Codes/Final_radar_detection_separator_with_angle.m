@@ -1,6 +1,13 @@
 %% =========================================================================
-%  Radar Detector + Classifier + DBSCAN + X/Y Spatial Plot +
+%  Radar Detector + Classifier + DBSCAN + Range-Azimuth Polar Plot +
 %  Range-Doppler Map + Interference Bearing Estimation
+%
+%  Indoor mutual-interference detection pipeline for TI IWR6843ISK
+%  FMCW mmWave radar, developed as part of the Master's thesis:
+%    "Interference Characterisation and Localisation for FMCW mmWave
+%     Radars" — FH Dortmund, Embedded Systems Engineering.
+%    Supervisor: Prof. Dr. Andreas Becker
+%    Co-supervisor: M. Eng. Tobias Uhlich
 %
 %  PURPOSE:
 %    Full processing pipeline for a TI IWR6843ISK 60 GHz FMCW radar.
@@ -8,6 +15,31 @@
 %    targets using CFAR, classifies them (Static / Moving / Interference),
 %    clusters confirmed detections with DBSCAN, and estimates the azimuth
 %    bearing of any interference source via coherent RX1/RX4 phase comparison.
+%
+%  DATA COLLECTION SETUP:
+%    Observer PC  : IWR6843ISK + DCA1000EVM, captured via mmWave Studio.
+%    Interferer PC: IWR6843AOPEVM, run via Demo Visualizer (no data is
+%    recorded from this radar — it exists only to generate interference).
+%
+%  NOTE ON COORDINATE SYSTEM:
+%    Detections are kept in native polar form (range, azimuth) as the
+%    primary representation, since the RX1/RX4 azimuth estimate comes from
+%    a 2-element (d = lambda/2) phase interferometer, which only yields a
+%    meaningful angle for a single dominant coherent source. For a general
+%    scene with several simultaneous Static/Moving reflectors this
+%    2-element estimate has effectively no angular resolution, so treating
+%    it as precise X/Y overstates what the array provides there. A
+%    Cartesian X/Y companion plot (Fig 3b) is included alongside the polar
+%    map purely for floor-plan-style visualisation, derived directly from
+%    the same (range, azimuth) values — no separate estimation is done.
+%    The dedicated bearing-estimation stage (Step 6b-6d) remains the one
+%    place this angle estimate is used quantitatively, applied to a
+%    single, confirmed interference cluster.
+%
+%  NOTE ON AZIMUTH CONVENTION:
+%    Phase is referenced RX4 against RX1 (angle(rx4 .* conj(rx1))) at all
+%    three locations where azimuth/bearing is computed (Step 2, Step 6b,
+%    Step 6d) — flipped from the previous RX1-against-RX4 convention.
 %
 %  SUPPORTS:  128-sample and 256-sample ADC configurations (auto-configured)
 %
@@ -22,11 +54,10 @@ clear; clc; close all;
 %  CONFIGURATION — only change these lines between datasets
 %% ================================================================
 % Path to raw binary ADC file captured from the radar sensor
-testFile         = 'adc_data_with_moving_iinterference0_2_Raw_0.bin';
-
+testFile         = 'adc_data_clean_interferer_ahed_Raw_0.bin';
 % Number of ADC samples per chirp — must match the capture configuration
 % Supported values: 128 or 256
-numADCSamples    = 256;   % set to 128 or 256 to match the dataset
+numADCSamples    = 128;   % set to 128 or 256 to match the dataset
 
 % Known true bearing of the interferer from lab geometry measurements.
 % Used only for error computation; does not affect processing.
@@ -48,11 +79,11 @@ numFramesToAudit = 1000;
 % Sensitivity for local neighbourhood spike detection in the frame-power
 % sequence. A frame is flagged if its power exceeds both neighbours by
 % at least this many dB.
-detection_sensitivity = 1.5;   % local neighbourhood spike sensitivity. 1 for 128 and 1.5 for 256 ADC sample configurations 
+detection_sensitivity = 1.0;   % local neighbourhood spike sensitivity (dB); 1.0 dB used for both 128- and 256-sample configurations
 
 % --- Waveform parameters (must match the radar profile) ---
 fc          = 60e9;           % carrier frequency (Hz)
-freqSlope   = 29.982e6 / 1e-6;% chirp frequency slope (Hz/s)
+freqSlope   = 29.982e6 / 1e-6;% chirp frequency slope (Hz/s), 29.982/30.0179/69.994
 fs          = 10e6;           % ADC sampling rate (Hz)
 idleTime    = 100e-6;         % idle time between chirps (s)
 rampEndTime = 57.14e-6;       % active ramp duration (s)
@@ -108,7 +139,7 @@ if numADCSamples == 128
     snr_interference_min = 16;                % minimum SNR to be promoted to Interference (dB)
     vel_static_thresh    = 0.15;              % velocity below this → Static (m/s)
     vel_moving_min       = 0.16;              % velocity above this → Moving candidate (m/s)
-    vel_moving_max       = 1.00;              % velocity above this → not a pedestrian (m/s)
+    vel_moving_max       = 1.50;              % velocity above this → not a pedestrian (m/s)
     persist_interf_max   = 0.05;              % range bins appearing in < this fraction of frames → transient (interference) 
     min_spike_count      = 1;                 % minimum frame-power spikes to declare interference
     dcNotch              = 2;                 % half-width of DC (zero-velocity) notch in bins
@@ -125,10 +156,10 @@ elseif numADCSamples == 256
     % and more detections per cluster → higher min_spike_count.
     minPhysicalRange     = first_valid_range;
     maxPhysicalRange     = 5.0;
-    snr_noise_thresh     = 8;
-    snr_static_min       = 28;   % higher than 128-sample due to better resolution
-    snr_moving_min       = 16;
-    snr_interference_min = 16;
+    snr_noise_thresh     = 10;
+    snr_static_min       = 40;   % higher than 128-sample due to better resolution
+    snr_moving_min       = 30;
+    snr_interference_min = 25;
     vel_static_thresh    = 0.15;
     vel_moving_min       = 0.16;
     vel_moving_max       = 1.50; % slightly relaxed upper bound for 256-sample
@@ -148,7 +179,7 @@ end
 
 % --- Bearing estimation quality thresholds ---
 % A detection contributes to bearing only if its SNR exceeds this gate
-bearing_snr_min      = 16;   % dB — minimum SNR for a detection to contribute
+bearing_snr_min      = 25;   % dB — minimum SNR for a detection to contribute
 
 % Circular standard deviation thresholds for per-cluster reliability labels
 bearing_std_reliable = 20;   % deg — below this → "High" confidence
@@ -262,7 +293,8 @@ end
 %      3. For DC-notch bins, apply a higher SNR gate (snr_static_min)
 %         to reduce false alarms from static clutter.
 %      4. For confirmed detections, compute azimuth angle from the
-%         phase difference between RX1 and RX4, and convert to X/Y.
+%         phase difference between RX1 and RX4, and keep it in native
+%         polar form (range, azimuth) — no Cartesian projection.
 %      5. Accumulate RD maps across frames for the averaged Fig 7 display.
 %
 %  Also stores complex RX1/RX4 values per detection for bearing estimation
@@ -271,7 +303,7 @@ fprintf('--- STEP 2: Processing %d frames ---\n', Total_Audited);
 fid = fopen(testFile, 'r');
 if fid == -1, error('File not found: %s', testFile); end
 
-% Cell array: frame_dets{f} = [frame, range, vel, snr, peak, az_deg, x, y]
+% Cell array: frame_dets{f} = [frame, range, vel, snr, peak, az_deg]
 frame_dets = cell(Total_Audited, 1);
 
 % Complex value storage for bearing estimation
@@ -374,30 +406,34 @@ for f = 1:Total_Audited
         snrs   = rd_db(sub2ind(size(rd_db),rBins,dBins)) - noiseFloor_dB; % SNR above noise floor
         peaks  = rd_db(sub2ind(size(rd_db),rBins,dBins));   % absolute peak power (dB)
 
-        % --- Phase-based azimuth estimation (RX1 vs RX4) ---
-        % Phase difference Δφ = angle(X_RX1 · X_RX4*) is proportional to
+        % --- Phase-based azimuth estimation (RX4 referenced against RX1) ---
+        % Phase difference Δφ = angle(X_RX4 · X_RX1*) is proportional to
         % sin(θ): Δφ = 2π·d_ant·sin(θ) / λ
         % With d_ant = λ/2 → Δφ = π·sin(θ) → sin(θ) = Δφ/π
         rx1_val    = rd_complex_rx1(sub2ind(size(rd_complex_rx1),rBins,dBins));
         rx4_val    = rd_complex_rx4(sub2ind(size(rd_complex_rx4),rBins,dBins));
-        phase_diff = angle(rx1_val .* conj(rx4_val));       % wrapped to [-π, π]
+        phase_diff = angle(rx4_val .* conj(rx1_val));       % wrapped to [-π, π] -- flipped: RX4 referenced against RX1
         sin_az     = max(-1, min(1, phase_diff / pi));       % clamp for numerical safety
         azimuth    = asin(sin_az);                           % azimuth angle (radians)
 
-        % Convert polar (range, azimuth) to Cartesian (X = cross-range, Y = forward)
-        x_pos      = ranges .* sin(azimuth);
-        y_pos      = ranges .* cos(azimuth);
+        % Detection stays in native polar form (range, azimuth). No
+        % Cartesian X/Y projection: for a scene with several simultaneous
+        % reflectors, the 2-element RX1/RX4 phase estimate does not carry
+        % enough angular resolution to justify treating it as a spatial
+        % X/Y coordinate. Azimuth is retained per-detection for display
+        % and is used quantitatively only in the dedicated single-source
+        % bearing-estimation stage (Step 6b-6d).
 
         % Store all detection attributes for this frame as one matrix row per hit
         frame_dets{f} = [repmat(f,numel(rBins),1), ranges, vels, ...
-                         snrs, peaks, rad2deg(azimuth), x_pos, y_pos];
+                         snrs, peaks, rad2deg(azimuth)];
 
         % Store complex values for bearing estimation
         rx1_complex_store{f} = rx1_val;
         rx4_complex_store{f} = rx4_val;
     else
         % No detections this frame — store empty placeholders
-        frame_dets{f}         = zeros(0,8);
+        frame_dets{f}         = zeros(0,6);
         rx1_complex_store{f}  = [];
         rx4_complex_store{f}  = [];
     end
@@ -422,13 +458,17 @@ det_vel    = allDets(:,3);   % velocity (m/s)
 det_snr    = allDets(:,4);   % SNR above noise floor (dB)
 det_rdPeak = allDets(:,5);   % absolute RD peak (dB)
 det_az_deg = allDets(:,6);   % azimuth angle (deg)
-det_x      = allDets(:,7);   % X spatial position (m)
-det_y      = allDets(:,8);   % Y spatial position (m)
 detCount   = size(allDets,1);
 
 % Concatenate complex values in same row-order as allDets
 rx1_complex_all = cell2mat(rx1_complex_store(1:Total_Audited));
 rx4_complex_all = cell2mat(rx4_complex_store(1:Total_Audited));
+
+% Cartesian (X, Y) companion coordinates, derived directly from the same
+% (range, azimuth) values above -- purely for the Fig 3b floor-plan view,
+% not a separate estimate. X = cross-range, Y = forward range.
+det_x = det_range .* sind(det_az_deg);
+det_y = det_range .* cosd(det_az_deg);
 
 fprintf('Total detections (pre-gate): %d\n\n', detCount);
 
@@ -639,15 +679,16 @@ fprintf('  Isolated Interference  : %d\n\n', sum(labels=="isolated interference"
 %  STEP 6: CLUSTER CENTROIDS
 %
 %  For each confirmed cluster (Static / Moving / Interference) compute
-%  the mean range, velocity, SNR, X and Y position across all member
-%  detections.  Results are stored in centroid_list for plotting.
+%  the mean range, velocity, SNR and azimuth across all member
+%  detections (native polar quantities — no X/Y). Results are stored
+%  in centroid_list for plotting.
 %% ================================================================
 fprintf('--- Cluster Centroids ---\n');
-fprintf('%-22s %6s %10s %10s %8s %8s %8s %8s\n', ...
-    'Class','ClustID','Range(m)','Vel(m/s)','SNR(dB)','X(m)','Y(m)','Count');
-fprintf('%s\n', repmat('-',1,80));
+fprintf('%-22s %6s %10s %10s %8s %8s %8s\n', ...
+    'Class','ClustID','Range(m)','Vel(m/s)','SNR(dB)','Az(deg)','Count');
+fprintf('%s\n', repmat('-',1,72));
 
-% centroid_list columns: [classIndex, clusterID, range, vel, SNR, X, Y, count]
+% centroid_list columns: [classIndex, clusterID, range, vel, SNR, azimuth_deg, count]
 centroid_list = [];
 
 % Colour and label maps indexed by classIndex (1=Static, 2=Moving, 3=Interference)
@@ -671,12 +712,11 @@ for c = 1:size(clsCluster,1)
         cRange = mean(det_range(cidx));
         cVel   = mean(det_vel(cidx));
         cSNR   = mean(det_snr(cidx));
-        cX     = mean(det_x(cidx));
-        cY     = mean(det_y(cidx));
+        cAz    = mean(det_az_deg(cidx));    % azimuth centroid (deg)
         cCount = numel(cidx);
-        fprintf('%-22s %6d %10.3f %10.3f %8.2f %8.3f %8.3f %8d\n', ...
-            cl, uc-offset, cRange, cVel, cSNR, cX, cY, cCount);
-        centroid_list(end+1,:) = [c, uc, cRange, cVel, cSNR, cX, cY, cCount];
+        fprintf('%-22s %6d %10.3f %10.3f %8.2f %8.2f %8d\n', ...
+            cl, uc-offset, cRange, cVel, cSNR, cAz, cCount);
+        centroid_list(end+1,:) = [c, uc, cRange, cVel, cSNR, cAz, cCount];
     end
 end
 
@@ -691,7 +731,7 @@ end
 %
 %    Rather than averaging per-detection phase angles (which suffer
 %    from wrap-around), we sum the complex phase products
-%      Σ (X_RX1 · X_RX4*)
+%      Σ (X_RX4 · X_RX1*)
 %    and extract the angle of the sum (coherent averaging).  This is
 %    equivalent to maximum-likelihood estimation under additive noise
 %    and correctly handles phase wrapping.
@@ -739,12 +779,12 @@ if nConfirmedInterf > 0
             cidx_filtered = cidx;  % fall back to all if too few pass SNR gate
         end
 
-        % --- Coherent phase averaging ---
-        % Sum RX1 * conj(RX4) across detections; the angle of the sum gives
+        % --- Coherent phase averaging (RX4 referenced against RX1) ---
+        % Sum RX4 * conj(RX1) across detections; the angle of the sum gives
         % the coherent mean phase difference, weighted by signal amplitude.
         rx1_cluster  = rx1_complex_all(cidx_filtered);
         rx4_cluster  = rx4_complex_all(cidx_filtered);
-        phase_products = rx1_cluster .* conj(rx4_cluster);
+        phase_products = rx4_cluster .* conj(rx1_cluster);   % flipped: RX4 referenced against RX1
         coherent_sum   = sum(phase_products);
 
         % Convert coherent mean phase → bearing angle
@@ -864,9 +904,10 @@ if nConfirmedInterf > 0
         if numel(frame_interf_idx) < 2, continue; end  % need at least 2 for phase estimate
 
         % Coherent phase sum for this frame's interference detections
+        % (RX4 referenced against RX1, matching Step 2 / Step 6b)
         rx1_f     = rx1_complex_all(frame_interf_idx);
         rx4_f     = rx4_complex_all(frame_interf_idx);
-        coh_sum_f = sum(rx1_f .* conj(rx4_f));
+        coh_sum_f = sum(rx4_f .* conj(rx1_f));   % flipped: RX4 referenced against RX1
         ph_f      = angle(coh_sum_f);
         sin_f     = max(-1, min(1, ph_f/pi));
         frame_bearings(fi) = rad2deg(asin(sin_f));
@@ -938,14 +979,16 @@ fprintf('Interference declared: %s\n', string(Interfered_Count >= min_spike_coun
 %% ================================================================
 %  STEP 8: PLOTS
 %
-%  Fig 1 — Frame power time-series with spike markers
-%  Fig 2 — Range vs |Velocity| scatter (classification view)
-%  Fig 3 — X/Y Cartesian spatial map with centroids
-%  Fig 4 — 3D accumulated map (X, Y, SNR)
-%  Fig 5 — Per-frame detection count time-series
-%  Fig 6 — SNR histogram per class
-%  Fig 7 — Averaged Range-Doppler map with detection overlays
-%  Fig A — Polar bearing plot (only if interference confirmed)
+%  Fig 1  — Frame power time-series with spike markers
+%  Fig 2  — Range vs |Velocity| scatter (classification view)
+%  Fig 3  — Range-Azimuth polar detection map with centroids
+%  Fig 3b — X/Y Cartesian spatial map (floor-plan view), derived directly
+%           from the same range/azimuth values as Fig 3
+%  Fig 4  — 3D accumulated map (Azimuth, Range, SNR)
+%  Fig 5  — Per-frame detection count time-series
+%  Fig 6  — SNR histogram per class
+%  Fig 7  — Averaged Range-Doppler map with detection overlays
+%  Fig A  — Polar bearing plot (only if interference confirmed)
 %% ================================================================
 
 % Logical mask: detections within the valid physical range gate
@@ -1016,9 +1059,95 @@ xlabel('|Velocity| (m/s)'); ylabel('Range (m)');
 title(sprintf('Range vs |Velocity| — %s', config_label));
 legend('Location','best'); grid on;
 
-% --- Fig 3: X/Y Cartesian spatial map ---
-% Top-down floor-plan view. X = cross-range (left/right), Y = forward range.
-% Centroid stars mark the mean position of each confirmed cluster.
+% --- Fig 3: Range-Azimuth polar detection map ---
+% Detections are kept in native polar form (range, azimuth) rather than
+% projected into X/Y: the RX1/RX4 phase-interferometer only resolves
+% angle reliably for a single dominant source, so for a scene with
+% several simultaneous reflectors a Cartesian projection would overstate
+% the spatial precision the array actually provides.
+% Observer radar is shown at the origin (r = 0).
+figure('Color','w','Name','Range-Azimuth Detection Map');
+ax3 = polaraxes;
+ax3.ThetaZeroLocation = 'top';     % 0 deg at top (forward direction)
+ax3.ThetaDir          = 'clockwise'; % positive angles to the right
+ax3.ThetaLim          = [-90 90];  % limit to visible forward hemisphere
+ax3.RLim              = [0 maxPhysicalRange*1.05];
+hold(ax3, 'on');
+
+idx = labels=="Noise" & inRange;
+if sum(idx)>0
+    pIdx=find(idx);
+    if numel(pIdx)>1000, pIdx=pIdx(randperm(numel(pIdx),1000)); end
+    polarscatter(ax3, deg2rad(det_az_deg(pIdx)), det_range(pIdx), 6, col_noise, 'o',...
+        'filled','MarkerFaceAlpha',0.10,'DisplayName','Noise');
+end
+if nStatic>0
+    polarscatter(ax3, deg2rad(det_az_deg(labels=="Static")), det_range(labels=="Static"),...
+        50,col_static,'s','filled','MarkerFaceAlpha',0.85,...
+        'DisplayName',sprintf('Static (%d)',nStatic));
+end
+if nMoving>0
+    polarscatter(ax3, deg2rad(det_az_deg(labels=="Moving")), det_range(labels=="Moving"),...
+        25,col_moving,'^','filled','MarkerFaceAlpha',0.65,...
+        'DisplayName',sprintf('Moving (%d)',nMoving));
+end
+if nInterf>0
+    polarscatter(ax3, deg2rad(det_az_deg(labels=="clustered interference")), det_range(labels=="clustered interference"),...
+        60,col_interf,'d','filled','MarkerFaceAlpha',0.95,...
+        'DisplayName',sprintf('Clustered Interference (%d)',nInterf));
+end
+if nWeak>0
+    polarscatter(ax3, deg2rad(det_az_deg(labels=="isolated interference")), det_range(labels=="isolated interference"),...
+        12,col_interf_weak,'o','filled','MarkerFaceAlpha',0.65,...
+        'DisplayName',sprintf('Isolated Interference (%d)',nWeak));
+end
+
+% Overlay cluster centroids as pentagrams; show each class in legend once
+if ~isempty(centroid_list)
+    sDone=false; mDone=false; iDone=false;
+    for i=1:size(centroid_list,1)
+        cc=centroid_list(i,1); cAz=centroid_list(i,6); cRng=centroid_list(i,3);
+        col=colMap{cc}; lbl=lblMap{cc};
+        switch cc
+            case 1, showLeg=~sDone; sDone=true; sz=180;
+            case 2, showLeg=~mDone; mDone=true; sz=180;
+            case 3, showLeg=~iDone; iDone=true; sz=150;
+        end
+        if showLeg
+            polarscatter(ax3, deg2rad(cAz), cRng, sz, col, 'p', 'filled', ...
+                'MarkerEdgeColor','k','LineWidth',1.5,'DisplayName',lbl);
+        else
+            polarscatter(ax3, deg2rad(cAz), cRng, sz, col, 'p', 'filled', ...
+                'MarkerEdgeColor','k','LineWidth',1.5,'HandleVisibility','off');
+        end
+    end
+end
+
+% Observer radar at origin
+polarscatter(ax3, 0, 0, 150, 'bs', 'filled', 'MarkerEdgeColor','k', ...
+    'LineWidth',1.5,'DisplayName','Observer Radar');
+
+title(ax3, {sprintf('Range-Azimuth Detection Map — %s — %s', config_label, ...
+       strrep(testFile,'_Raw_0.bin','')); ...
+       sprintf('%d frames | Static:%d | Moving:%d | Interf(clustered):%d | Interf(isolated):%d | Spikes:%d/%d', ...
+       Total_Audited, nStatic, nMoving, nInterf, nWeak, ...
+       Interfered_Count, Total_Audited)}, 'Interpreter','none');
+legend(ax3, 'Location','southoutside','NumColumns',3);
+
+% Annotation box summarising interference counts (only when interference found)
+if Interfered_Count >= min_spike_count
+    annotation('textbox',[0.12 0.01 0.65 0.05],...
+        'String',sprintf('Interference spikes: %d/%d (%.1f%%)  |  Clustered: %d  |  Isolated: %d', ...
+        Interfered_Count,Total_Audited,100*Interfered_Count/Total_Audited,...
+        nInterf,nWeak),...
+        'FitBoxToText','on','BackgroundColor',[1 0.93 0.93],...
+        'EdgeColor',col_interf,'Color',col_interf,'FontSize',9);
+end
+
+% --- Fig 3b: X/Y Cartesian spatial map (floor-plan view) ---
+% Same detections and centroids as Fig 3, projected to Cartesian X/Y
+% (X = cross-range, Y = forward range) purely for a floor-plan-style
+% view. Not a separate estimate -- derived directly from (range, azimuth).
 % Observer radar is shown at the origin.
 figure('Color','w','Name','X/Y Spatial Detection Map');
 hold on; axis equal;
@@ -1051,11 +1180,12 @@ if nWeak>0
         'DisplayName',sprintf('Isolated Interference (%d)',nWeak));
 end
 
-% Overlay cluster centroids as pentagrams; show each class in legend once
+% Overlay cluster centroids (converted from range/azimuth to X/Y)
 if ~isempty(centroid_list)
     sDone=false; mDone=false; iDone=false;
     for i=1:size(centroid_list,1)
-        cc=centroid_list(i,1); cX=centroid_list(i,6); cY=centroid_list(i,7);
+        cc=centroid_list(i,1); cRng=centroid_list(i,3); cAz=centroid_list(i,6);
+        cX = cRng * sind(cAz); cY = cRng * cosd(cAz);
         col=colMap{cc}; lbl=lblMap{cc};
         switch cc
             case 1, showLeg=~sDone; sDone=true; sz=180;
@@ -1076,7 +1206,7 @@ end
 scatter(0,0,150,'bs','filled','MarkerEdgeColor','k','LineWidth',1.5,...
     'DisplayName','Observer Radar');
 
-xlim([-5 5]); ylim([0 6]);
+xlim([-maxPhysicalRange maxPhysicalRange]); ylim([0 maxPhysicalRange*1.1]);
 xlabel('X (m) — Cross-range'); ylabel('Y (m) — Forward range');
 title({sprintf('X/Y Spatial Map — %s — %s', config_label, ...
        strrep(testFile,'_Raw_0.bin','')); ...
@@ -1085,7 +1215,6 @@ title({sprintf('X/Y Spatial Map — %s — %s', config_label, ...
        Interfered_Count, Total_Audited)}, 'Interpreter','none');
 legend('Location','northeast'); grid on;
 
-% Annotation box summarising interference counts (only when interference found)
 if Interfered_Count >= min_spike_count
     annotation('textbox',[0.12 0.01 0.65 0.05],...
         'String',sprintf('Interference spikes: %d/%d (%.1f%%)  |  Clustered: %d  |  Isolated: %d', ...
@@ -1095,8 +1224,9 @@ if Interfered_Count >= min_spike_count
         'EdgeColor',col_interf,'Color',col_interf,'FontSize',9);
 end
 
-% --- Fig 4: 3D accumulated map ---
-% Adds SNR as the Z-axis so strong/weak detections are visually separated.
+% --- Fig 4: 3D accumulated map (Azimuth, Range, SNR) ---
+% Uses the native polar quantities directly (azimuth, range) with SNR as
+% the third axis, instead of a Cartesian X/Y projection.
 figure('Color','w','Name','3D Accumulated Detection Map');
 hold on;
 clsMap3D = {"Noise",col_noise,6,0.10,'o'; ...
@@ -1113,14 +1243,14 @@ for c=1:size(clsMap3D,1)
     if strcmp(cl,'Noise') && numel(pIdx)>1000
         pIdx=pIdx(randperm(numel(pIdx),1000));
     end
-    scatter3(det_x(pIdx),det_y(pIdx),det_snr(pIdx),sz,col,mkr,...
+    scatter3(det_az_deg(pIdx),det_range(pIdx),det_snr(pIdx),sz,col,mkr,...
         'filled','MarkerFaceAlpha',alp,'DisplayName',...
         sprintf('%s (%d)',cl,sum(idx)));
 end
 if ~isempty(centroid_list)
     sDone=false; mDone=false; iDone=false;
     for i=1:size(centroid_list,1)
-        cc=centroid_list(i,1); cX=centroid_list(i,6); cY=centroid_list(i,7);
+        cc=centroid_list(i,1); cAz=centroid_list(i,6); cRng=centroid_list(i,3);
         cSNR=centroid_list(i,5); col=colMap{cc}; lbl=lblMap{cc};
         switch cc
             case 1, showLeg=~sDone; sDone=true;
@@ -1128,17 +1258,17 @@ if ~isempty(centroid_list)
             case 3, showLeg=~iDone; iDone=true;
         end
         if showLeg
-            scatter3(cX,cY,cSNR,200,col,'p','filled','MarkerEdgeColor','k',...
+            scatter3(cAz,cRng,cSNR,200,col,'p','filled','MarkerEdgeColor','k',...
                 'LineWidth',1.5,'DisplayName',lbl);
         else
-            scatter3(cX,cY,cSNR,200,col,'p','filled','MarkerEdgeColor','k',...
+            scatter3(cAz,cRng,cSNR,200,col,'p','filled','MarkerEdgeColor','k',...
                 'LineWidth',1.5,'HandleVisibility','off');
         end
     end
 end
 scatter3(0,0,0,150,'bs','filled','MarkerEdgeColor','k','DisplayName','Observer Radar');
-xlabel('X (m)'); ylabel('Y (m)'); zlabel('SNR (dB)');
-title(sprintf('3D Accumulated Map — %s', config_label));
+xlabel('Azimuth (deg)'); ylabel('Range (m)'); zlabel('SNR (dB)');
+title(sprintf('3D Range-Azimuth-SNR Map — %s', config_label));
 legend('Location','best'); grid on; view(30,30);
 
 % --- Fig 5: Per-frame detection count ---
