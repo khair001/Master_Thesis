@@ -1,278 +1,193 @@
 # Interference Characterisation and Localisation for FMCW mmWave Radars
 
-![MATLAB](https://img.shields.io/badge/MATLAB-R2021a%2B-blue)
-![Platform](https://img.shields.io/badge/Hardware-TI%20IWR6843ISK-orange)
-![Thesis](https://img.shields.io/badge/Thesis-Master%27s-green)
-![Status](https://img.shields.io/badge/Status-Complete-brightgreen)
+**Master's Thesis — Embedded Systems Engineering**  
+**Fachhochschule Dortmund**
 
-> **Master's Thesis — Embedded Systems Engineering**  
-> Fachhochschule Dortmund | Department of Embedded Systems Engineering 
-> Author: Md Abul Khair | Matriculation: 7207060
+This repository contains the MATLAB implementations and selected results from my Master's thesis, **"Interference Characterisation and Localisation for FMCW mmWave Radars."**
+
+The work investigates the detection, classification, characterisation, and localisation of mutual interference between independently operating FMCW millimetre-wave radar systems. The proposed processing pipeline operates on raw ADC measurements from an observer radar without requiring prior knowledge of the interfering radar's waveform parameters, timing, or spatial position.
 
 ---
 
-## Overview
+## Research Objectives
 
-This repository contains the MATLAB implementation developed for 
-the Master's thesis:
+The thesis addresses three main challenges:
 
-**"Interference Characterization and Localization for FMCW 
-mmWave Radars"**
+- **Interference detection:** Determine whether and when mutual interference occurs using locally observed radar data.
+- **Detection and classification:** Extract candidate detections and distinguish between static objects, moving objects, background noise, and interference-related detections.
+- **Interference source localisation:** Investigate whether phase information associated with interference detections can be used to estimate the angular direction of the interfering radar.
 
-The project develops a complete eight-stage signal processing 
-pipeline for blind interference characterisation and target 
-classification using the Texas Instruments IWR6843ISK 
-millimetre-wave radar platform. The pipeline operates without 
-any prior knowledge of the aggressor radar's chirp parameters, 
-timing, or spatial position.
-
-### Key Contributions
-
-- ✅ Frame-level interference spike detection using local 
-     neighbourhood power comparison
-- ✅ Dual-path CA-CFAR detection with DC notch architecture 
-     for static object detection
-- ✅ Four-class sequential rule-based classification: 
-     static / moving / interference / noise
-- ✅ Two-tier DBSCAN clustering: confirmed vs weak interference
-- ✅ Exploratory bearing estimation from interference cluster 
-     azimuth angles
-
-### Key Findings
-
-| Finding | Result |
-|---|---|
-| Interference declaration accuracy | 100% within FoV, 0 false declarations |
-| Static detection (256-sample) | 28--43 dB SNR |
-| Interference artefact velocity (128-sample) | ±7.58 m/s |
-| Interference artefact velocity (256-sample) | 1.65--3.08 m/s |
-| Bearing estimation consistency | Circular std 0.7°--1.4° |
+The complete system additionally characterises interference by separating spatially consistent, repeating interference patterns from isolated interference events.
 
 ---
 
-## Hardware
+## System Architecture
 
-| Component | Specification |
-|---|---|
-| Observer radar | TI IWR6843ISK |
-| Data capture | TI DCA1000EVM |
-| Interferer radar | TI IWR6843AOPEVM |
-| Observer bandwidth | 383.77 MHz (128-sample) / 767.54 MHz (256-sample) |
-| Interferer bandwidth | ~2.6 GHz |
-| Operating frequency | 60 GHz |
+The experimental system consists of an observer radar, an independently operating interfering radar, and real physical targets. Raw ADC data from the observer radar are captured and processed offline in MATLAB.
+
+![System Architecture](figures/system_architecture.png)
+
+The experiments were conducted in both indoor and outdoor environments to investigate the influence of measurement conditions and multipath propagation on interference detection, classification, and bearing estimation.
 
 ---
 
-## Step 1 — Data Collection
+## Processing Pipeline
 
-Before any analysis can take place, raw radar data must be 
-recorded from the hardware setup. The collected `.bin` files 
-are the direct input to the analysis pipeline.
+The developed processing pipeline operates directly on raw ADC measurements and combines signal processing, detection, rule-based classification, temporal analysis, and clustering.
 
-### Equipment
+![Processing Pipeline](figures/processing_pipeline.png)
 
-| Role | Device |
-|---|---|
-| Observer radar | TI IWR6843ISK |
-| Raw data capture | TI DCA1000EVM |
-| Interferer radar | TI IWR6843AOPEVM |
+The main processing stages are:
 
-### Setup and Configuration
+1. Raw ADC data parsing and complex I/Q reconstruction
+2. Range FFT and Doppler FFT processing
+3. Frame-level interference detection based on local power spikes
+4. CA-CFAR target detection with DC leakage handling
+5. Rule-based classification into Static, Moving, and Noise detections
+6. Secondary Noise-to-Interference promotion
+7. DBSCAN clustering and interference characterisation
+8. Phase-based exploratory interference source bearing estimation
 
-**Observer PC (data recording machine)**
-
-The IWR6843ISK observer radar is connected to the DCA1000EVM 
-capture board, and both are connected to a PC via USB/Ethernet. 
-**mmWave Studio** is used on this PC to configure the observer 
-radar chirp parameters (bandwidth, ADC samples, frame rate, 
-etc.) and to start/stop data capture. The observer radar both 
-transmits and receives radar signals. All captured raw ADC data 
-is saved automatically as a `.bin` file on this PC.
-
-**Interferer PC (transmit-only machine)**
-
-The IWR6843AOPEVM interferer radar is connected to a separate 
-PC. **Demo Visualizer** is used on this PC to configure and 
-activate the interferer radar. The interferer radar transmits 
-signals only — no data is recorded from it.
-
-### Data Flow
-
-```
-[IWR6843AOPEVM]          [IWR6843ISK] ←──── RF interference
- Interferer radar          Observer radar
- (transmit only)          (transmit + receive)
-       │                        │
- Demo Visualizer           DCA1000EVM
- (Interferer PC)           (capture board)
-                                │
-                           mmWave Studio
-                           (Observer PC)
-                                │
-                           raw_data.bin
-```
-
-### Output
-
-The recorded `.bin` files contain raw ADC samples from the 
-observer radar and are the sole input to the MATLAB analysis 
-pipeline. No data is collected from the interferer radar side.
-
-> **Note:** Raw `.bin` files are not included in this 
-> repository due to file size. Contact the author for 
-> data access.
+The processing thresholds were derived empirically from dedicated baseline recordings rather than assumed directly from prior literature.
 
 ---
 
-## Scripts
+## Experimental Platform
 
-### 1. `radar_data_analyser.m` — Parameter Analyser
+The experimental setup used Texas Instruments FMCW mmWave radar hardware.
 
-Run this **first** to study your dataset before running the 
-main pipeline.
+- **Observer radar:** TI IWR6843ISK-ODS
+- **Interfering radar:** TI IWR6843AOP
+- **Raw ADC acquisition:** TI DCA1000
+- **Operating frequency:** 60 GHz
+- **Processing environment:** MATLAB
+- **Measurement environments:** Indoor and outdoor
+- **Target scenarios:** Clean, static-only, moving-only, static + moving, and active-interference scenarios
+- **Interferer positions:** Ahead, left, right, and additional field-of-view/sidelobe conditions
 
-**Purpose:**
-- Inspect Range-Doppler map behaviour
-- Observe noise and interference characteristics
-- Tune CFAR, SNR, velocity, and DBSCAN parameters
-- Evaluate detection behaviour across frames
-
-**Parameters analysed:**
-- CFAR sensitivity and training cell count
-- SNR thresholds (noise gate, static min, moving min)
-- Velocity thresholds (static max, moving range)
-- DBSCAN epsilon and MinPts
-- Interference spike threshold (δ = 5 dB)
-- Range gate limits
+The experiments included different ADC sample configurations and chirp slopes to investigate the effect of radar configuration on interference behaviour.
 
 ---
 
-### 2. `Final_radar_detection_separator_with_angle.m` — Main Pipeline
+## Interference Detection
 
-The complete eight-stage processing pipeline.
+Interference presence is first evaluated at frame level using changes in the mean Range-Doppler power. A frame is identified as a potential interference event when its power forms a sufficiently strong local spike relative to neighbouring frames.
 
-**Pipeline stages:**
-1. Hardware parameter derivation from config
-2. Frame-level interference spike detection
-3. CA-CFAR detection with dual-path DC notch
-4. Primary rule-based classification (static / moving / noise)
-5. Secondary interference separation
-6. DBSCAN spatial clustering
-7. Cluster centroid and statistics extraction
-8. Visualisation and bearing estimation
+![Interference Spike Detection](figures/interference_spike_detection.png)
 
-**Output figures generated:**
-- Frame power timeline with spike markers
-- Range vs velocity scatter plot
-- X/Y spatial detection map
-- 3D detection map
-- SNR distribution histogram
-- Range-Doppler map (single frame)
-- Polar bearing estimation plot
+This provides a temporal baseline for the subsequent detection-level interference separation stage. Candidate detections initially classified as Noise are reconsidered for promotion to the Interference class based on temporal correlation with detected interference events and additional signal characteristics.
 
 ---
 
-## How to Use
+## Detection and Classification
 
-### Requirements
+Candidate detections are extracted using CA-CFAR processing and subsequently classified using empirically derived SNR and velocity criteria.
 
-- MATLAB R2021a or later
-- Signal Processing Toolbox
-- Statistics and Machine Learning Toolbox
+The pipeline distinguishes four final detection categories:
 
-### Step 2 — Run Analyser First
+- **Static objects**
+- **Moving objects**
+- **Noise**
+- **Interference**
 
-```matlab
-radar_data_analyser.m
-```
+DBSCAN clustering is subsequently applied to characterise interference detections as either spatially consistent **clustered interference** or **isolated interference**.
 
-Use the generated plots and printed statistics to understand 
-the dataset and tune parameters before running the main script.
+![Detection Classification](figures/detection_classification.png)
 
-### Step 3 — Configure Main Script
-
-Open `Final_radar_detection_separator_with_angle.m` and set 
-these parameters at the top of the file:
-
-```matlab
-% File and configuration
-testFile        = 'your_file.bin';   % path to your .bin file
-numADCSamples   = 256;               % 128 or 256
-true_bearing_deg = 0.0;              % known interferer bearing
-                                     % (for validation only)
-```
-
-Update other thresholds if your dataset requires different 
-values from the defaults derived in the thesis.
-
-### Step 4 — Run Main Script
-
-```matlab
-Final_radar_detection_separator_with_angle.m
-```
-
-### Step 5 — View Results
-
-The script prints a full parameter profile to the console 
-and displays all visualisation figures automatically.
-
-**Example console output:**
-```
-=== Radar Parameters ===
-ADC samples:         256
-Range resolution:    0.1954 m
-Velocity resolution: 0.1243 m/s
-
---- STEP 1: Interference spike detection ---
-Interference DETECTED: 65 spikes
-
---- Final classification ---
-Static       : 17
-Moving       : 1411
-Interference : 48  (confirmed)
-Weak Interf. : 11
-
---- Bearing Estimate ---
-Weighted bearing: +25.7 deg
-```
+The experiments showed that radar configuration has a significant influence on the observed interference artefacts. In particular, the apparent Range-Doppler characteristics of interference are dependent on the observer radar configuration and therefore cannot be treated as fixed physical properties of the interfering radar.
 
 ---
 
-## Dataset
+## Interference Source Bearing Estimation
 
-The experimental datasets used in the thesis were collected 
-in a 5 m × 5 m laboratory environment at FH Dortmund. 
-A total of **27 datasets** were recorded across **17 unique 
-scenarios** covering:
+An exploratory bearing-estimation stage was developed to investigate whether the phase information contained in clustered interference detections could be used to estimate the direction of the interference source.
 
-- Clean environments (no targets, no interferer)
-- Target-only scenarios (static objects, moving person)
-- Mixed scenarios (targets + active interferer at multiple 
-  positions: ahead, left, right, out of FoV)
+The method uses coherent phase averaging between receive antenna channels. An independent antenna-pair analysis was additionally performed as a cross-check of the observed bearing behaviour.
 
-Two hardware configurations were used:
-- **128-sample** (16 datasets): BW = 383.77 MHz, ΔR = 0.3909 m
-- **256-sample** (11 datasets): BW = 767.54 MHz, ΔR = 0.1954 m
+![Bearing Estimation Comparison](figures/bearing_estimation_comparison.png)
 
-> **Note:** Raw `.bin` files are not included in this 
-> repository due to file size. Contact the author for 
-> data access.
+The bearing estimates demonstrated strong repeatability within individual measurement scenarios. However, the estimated direction did not consistently track the true physical position of the interferer. Similar convergence behaviour was observed across different environments and was reproduced using an independent receive-antenna pair.
+
+These findings indicate that the phase-estimation mechanism itself produces repeatable measurements, while a systematic effect common to the evaluated configurations prevents reliable absolute interference-source localisation. The thesis therefore treats bearing estimation as an exploratory investigation and documents its observed limitations rather than claiming a fully resolved localisation solution.
 
 ---
 
-## Classification Thresholds
+## MATLAB Code
 
-All thresholds were derived empirically from cross-dataset 
-profiling rather than assumed from prior literature.
+Four separate MATLAB codebases were developed and used during the thesis.
 
-| Parameter | 128-Sample | 256-Sample |
+| Code | Description | Role in the Thesis |
 |---|---|---|
-| SNR noise gate | 8 dB | 8 dB |
-| SNR static min | 19 dB | 28 dB |
-| SNR moving min | 16 dB | 16 dB |
-| Velocity static max | 0.15 m/s | 0.15 m/s |
-| Velocity moving range | 0.16--1.00 m/s | 0.16--1.50 m/s |
-| Min spike count | 1 | 5 |
-| Spike threshold δ | 5.0 dB | 5.0 dB |
+| `Threshold_derivation_script.m` | Profiles dedicated baseline recordings to derive SNR, velocity, persistence, and DBSCAN parameters | Threshold derivation |
+| `Main_pipeline_indoor.m` | Implements the complete processing pipeline for indoor measurements | Corrected indoor results |
+| `Outdoor_pipeline_initial_approach.m` | Initial implementation of the processing pipeline for outdoor measurements | Original outdoor analysis and promotion-approach sensitivity comparison |
+| `Outdoor_pipeline_revised_approach.m` | Revised outdoor implementation with an updated Noise-to-Interference promotion approach and independent RX2/RX3 bearing verification | Corrected outdoor results |
+
+The MATLAB implementations are available in the [`Code`](Code/) directory.
+
+### Important Note on Code Versions
+
+The corrected indoor results reported in the final thesis were generated using `Main_pipeline_indoor.m`.
+
+The corrected outdoor results, including the independent RX2/RX3 antenna-pair bearing verification, were generated using `Outdoor_pipeline_revised_approach.m`.
+
+`Outdoor_pipeline_initial_approach.m` is retained because it represents the initial promotion approach and is used as a comparison condition in the promotion-approach sensitivity analysis.
 
 ---
+
+## Repository Structure
+
+    Master_Thesis/
+    │
+    ├── Code/
+    │   ├── Main_pipeline_indoor.m
+    │   ├── Outdoor_pipeline_initial_approach.m
+    │   ├── Outdoor_pipeline_revised_approach.m
+    │   └── Threshold_derivation_script.m
+    │
+    ├── data/
+    │   └── README.md
+    │
+    ├── docs/
+    │   └── Khair_Masters_Thesis_Corrected.pdf
+    │
+    ├── figures/
+    │   ├── system_architecture.png
+    │   ├── processing_pipeline.png
+    │   ├── interference_spike_detection.png
+    │   ├── detection_classification.png
+    │   └── bearing_estimation_comparison.png
+    │
+    └── README.md
+
+---
+
+## Dataset Availability
+
+The raw ADC recordings are not included in this GitHub repository because of their large file sizes.
+
+The measurement campaign contains dedicated baseline and interference recordings covering clean, static-only, moving-only, combined static-and-moving, and active-interference scenarios under different radar configurations.
+
+Additional information about the experimental datasets is provided in [`data/README.md`](data/README.md).
+
+---
+
+## Thesis
+
+The complete corrected Master's thesis is available in the [`docs`](docs/) directory.
+
+The thesis provides the theoretical background, system design, experimental implementation, threshold derivation methodology, complete experimental results, and detailed discussion of the limitations identified during interference source bearing estimation.
+
+---
+
+## Technologies and Methods
+
+`MATLAB` · `FMCW Radar` · `mmWave Radar` · `Radar Signal Processing` · `Range-Doppler Processing` · `CA-CFAR` · `DBSCAN` · `Interference Detection` · `Target Classification` · `Direction of Arrival` · `DCA1000` · `TI IWR6843`
+
+---
+
+## Author
+
+**Md Abul Khair**  
+Master's in Embedded Systems Engineering  
+Fachhochschule Dortmund
