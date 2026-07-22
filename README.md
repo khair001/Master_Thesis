@@ -149,7 +149,7 @@ The corrected outdoor results, including the independent RX2/RX3 antenna-pair be
     │   └── README.md
     │
     ├── docs/
-    │   └── Khair_Masters_Thesis_Corrected.pdf
+    │   └── Khair_Masters_Thesis_.pdf
     │
     ├── figures/
     │   ├── system_architecture.png
